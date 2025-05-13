@@ -7,6 +7,8 @@ from nltk.sentiment.vader import SentimentIntensityAnalyzer
 from nltk.stem import PorterStemmer
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
+# Added import for metrics calculation
+from sklearn.metrics import classification_report, precision_score, recall_score, f1_score
 from tensorflow.keras.preprocessing.text import Tokenizer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from tensorflow.keras.models import Sequential
@@ -165,6 +167,55 @@ bilstm_loss, bilstm_accuracy = bilstm_model.evaluate(X_test_pad, y_test)
 print(f"LSTM Model - Loss: {lstm_loss}, Accuracy: {lstm_accuracy}")
 print(f"BiLSTM Model - Loss: {bilstm_loss}, Accuracy: {bilstm_accuracy}")
 
+print("\n--- Detailed Performance Metrics ---")
+
+# For LSTM model - calculate predictions
+y_pred_lstm = lstm_model.predict(X_test_pad)
+if num_classes > 2:  # Multi-class case
+    y_pred_lstm = np.argmax(y_pred_lstm, axis=1)
+else:  # Binary case
+    y_pred_lstm = (y_pred_lstm > 0.5).astype(int).flatten()
+
+# Calculate and display LSTM metrics
+print("\nLSTM Model Detailed Metrics:")
+print(classification_report(y_test, y_pred_lstm))
+lstm_precision = precision_score(y_test, y_pred_lstm, average='weighted')
+lstm_recall = recall_score(y_test, y_pred_lstm, average='weighted')
+lstm_f1 = f1_score(y_test, y_pred_lstm, average='weighted')
+
+# Format metrics as percentages
+print(f"LSTM Metrics Summary:")
+print(f"Accuracy: {lstm_accuracy:.2%}")
+print(f"Precision: {lstm_precision:.2%}")
+print(f"Recall: {lstm_recall:.2%}")
+print(f"F1-Score: {lstm_f1:.2%}")
+
+# For BiLSTM model - calculate predictions
+y_pred_bilstm = bilstm_model.predict(X_test_pad)
+if num_classes > 2:  # Multi-class case
+    y_pred_bilstm = np.argmax(y_pred_bilstm, axis=1)
+else:  # Binary case
+    y_pred_bilstm = (y_pred_bilstm > 0.5).astype(int).flatten()
+
+# Calculate and display BiLSTM metrics
+print("\nBiLSTM Model Detailed Metrics:")
+print(classification_report(y_test, y_pred_bilstm))
+bilstm_precision = precision_score(y_test, y_pred_bilstm, average='weighted')
+bilstm_recall = recall_score(y_test, y_pred_bilstm, average='weighted')
+bilstm_f1 = f1_score(y_test, y_pred_bilstm, average='weighted')
+
+# Format metrics as percentages
+print(f"BiLSTM Metrics Summary:")
+print(f"Accuracy: {bilstm_accuracy:.2%}")
+print(f"Precision: {bilstm_precision:.2%}")
+print(f"Recall: {bilstm_recall:.2%}")
+print(f"F1-Score: {bilstm_f1:.2%}")
+
+# Calculate actual number of epochs trained for each model
+actual_lstm_epochs = len(lstm_history.history['loss'])
+actual_bilstm_epochs = len(bilstm_history.history['loss'])
+print(f"\nActual epochs trained - LSTM: {actual_lstm_epochs}, BiLSTM: {actual_bilstm_epochs}")
+
 # 12. Plot training history
 plt.figure(figsize=(12, 5))
 
@@ -249,3 +300,15 @@ with open('label_encoder.pickle', 'wb') as handle:
 sentiment_distribution = df['Sentiment'].value_counts().reset_index()
 sentiment_distribution.columns = ['Sentiment', 'Count']
 sentiment_distribution.to_csv('sentiment_distribution.csv', index=False)
+
+# Create a performance summary DataFrame and save to CSV
+performance_metrics = pd.DataFrame({
+    'Model': ['LSTM', 'BiLSTM'],
+    'Accuracy': [lstm_accuracy, bilstm_accuracy],
+    'Precision': [lstm_precision, bilstm_precision],
+    'Recall': [lstm_recall, bilstm_recall],
+    'F1_Score': [lstm_f1, bilstm_f1],
+    'Epochs_Trained': [actual_lstm_epochs, actual_bilstm_epochs]
+})
+performance_metrics.to_csv('model_performance_metrics.csv', index=False)
+print("\nPerformance metrics saved to 'model_performance_metrics.csv'")
