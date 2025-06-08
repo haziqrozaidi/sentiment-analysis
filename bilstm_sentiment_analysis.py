@@ -1,0 +1,308 @@
+import pandas as pd
+import numpy as np
+import re
+import nltk
+from nltk.corpus import stopwords
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+from nltk.stem import PorterStemmer
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import classification_report, precision_score, recall_score, f1_score
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Embedding, LSTM, Dense, Dropout, Bidirectional
+from tensorflow.keras.callbacks import EarlyStopping
+import matplotlib.pyplot as plt
+import pickle
+import os
+
+# Create output directory for BiLSTM results
+output_dir = os.path.join('results', 'bilstm')
+os.makedirs(output_dir, exist_ok=True)
+print(f"Saving results to {output_dir}")
+
+# Download necessary NLTK packages
+nltk.download('stopwords')
+nltk.download('vader_lexicon')  # Download VADER lexicon for sentiment analysis
+
+def get_sentiment_label(text):
+    if isinstance(text, float) and np.isnan(text):
+        return 'Neutral'  # Handle NaN values
+    
+    scores = sid.polarity_scores(str(text))
+    compound_score = scores['compound']
+    
+    if compound_score >= 0.05:
+        return 'Positive'
+    elif compound_score <= -0.05:
+        return 'Negative'
+    else:
+        return 'Neutral'
+
+def clean_text(text):
+    # Handle NaN values
+    if isinstance(text, float) and np.isnan(text):
+        return ""
+    
+    # Remove URLs, mentions, hashtags, and special characters
+    text = re.sub(r'http\S+|www\S+|https\S+', '', str(text), flags=re.MULTILINE)
+    text = re.sub(r'@\w+', '', text)
+    text = re.sub(r'#\w+', '', text)
+    text = re.sub(r'[^\w\s]', '', text)
+    
+    # Convert to lowercase and tokenize
+    words = text.lower().split()
+    
+    # Remove stopwords and stem
+    words = [stemmer.stem(word) for word in words if word not in stop_words]
+    
+    return ' '.join(words)
+
+def create_bilstm_model(num_classes=1, max_len=100):
+    model = Sequential()
+    model.add(Embedding(input_dim=5000, output_dim=128, input_length=max_len))
+    model.add(Bidirectional(LSTM(units=128, dropout=0.2, recurrent_dropout=0.2)))
+    model.add(Dense(64, activation='relu'))
+    model.add(Dropout(0.5))
+    
+    # Adjust the output layer based on number of classes
+    if num_classes == 2:  # Binary
+        model.add(Dense(1, activation='sigmoid'))
+        loss = 'binary_crossentropy'
+    else:  # Multi-class
+        model.add(Dense(num_classes, activation='softmax'))
+        loss = 'sparse_categorical_crossentropy'
+    
+    model.compile(optimizer='adam', loss=loss, metrics=['accuracy'])
+    return model
+
+def predict_sentiment(text, model, tokenizer, sentiment_mapping, max_len, num_classes):
+    cleaned_text = clean_text(text)
+    sequence = tokenizer.texts_to_sequences([cleaned_text])
+    padded = pad_sequences(sequence, maxlen=max_len)
+    
+    if num_classes == 2:  # Binary classification
+        prediction = model.predict(padded)[0][0]
+        sentiment_idx = 1 if prediction >= 0.5 else 0
+        confidence = prediction if prediction >= 0.5 else 1 - prediction
+    else:  # Multi-class classification
+        prediction = model.predict(padded)[0]
+        sentiment_idx = np.argmax(prediction)
+        confidence = prediction[sentiment_idx]
+    
+    # Convert index back to sentiment label
+    for label, idx in sentiment_mapping.items():
+        if idx == sentiment_idx:
+            sentiment = label
+            break
+    
+    return sentiment, float(confidence)
+
+if __name__ == "__main__":
+    # Log execution time
+    start_time = pd.Timestamp.now()
+    print(f"BiLSTM Analysis started at: {start_time}")
+    
+    # 1. Load dataset
+    df = pd.read_csv('tweets_dataset.csv')
+    print("Original columns:", df.columns.tolist())
+    
+    # 2. Use VADER for initial sentiment labeling
+    sid = SentimentIntensityAnalyzer()
+    df['Sentiment'] = df['Content'].apply(get_sentiment_label)
+    print("Sentiment distribution from VADER:", df['Sentiment'].value_counts())
+    
+    # 3. Text Preprocessing
+    stop_words = set(stopwords.words('english'))
+    stemmer = PorterStemmer()
+    df['Cleaned_Content'] = df['Content'].apply(clean_text)
+    
+    # 4. Encode sentiment labels
+    encoder = LabelEncoder()
+    df['Encoded_Sentiment'] = encoder.fit_transform(df['Sentiment'])
+    
+    # Save original sentiment labels 
+    sentiment_mapping = dict(zip(encoder.classes_, encoder.transform(encoder.classes_)))
+    print("Sentiment mapping:", sentiment_mapping)
+    
+    # 5. Split data
+    X = df['Cleaned_Content'].values
+    y = df['Encoded_Sentiment'].values
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    # 6. Tokenize and pad sequences
+    tokenizer = Tokenizer(num_words=5000)
+    tokenizer.fit_on_texts(X_train)
+    X_train_seq = tokenizer.texts_to_sequences(X_train)
+    X_test_seq = tokenizer.texts_to_sequences(X_test)
+    
+    # Find the maximum sequence length
+    max_len = max(len(x) for x in X_train_seq)
+    X_train_pad = pad_sequences(X_train_seq, maxlen=max_len)
+    X_test_pad = pad_sequences(X_test_seq, maxlen=max_len)
+    
+    # Check for class imbalance
+    print("Class distribution in training data:", np.bincount(y_train))
+    
+    # Determine number of classes
+    num_classes = len(np.unique(y_train))
+    print(f"Number of classes: {num_classes}")
+    
+    # 7. Train BiLSTM model
+    bilstm_model = create_bilstm_model(num_classes, max_len)
+    early_stopping = EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True)
+    bilstm_history = bilstm_model.fit(
+        X_train_pad, y_train,
+        epochs=10,
+        batch_size=32,
+        validation_split=0.1,
+        callbacks=[early_stopping]
+    )
+    
+    # 8. Evaluate model
+    bilstm_loss, bilstm_accuracy = bilstm_model.evaluate(X_test_pad, y_test)
+    print(f"BiLSTM Model - Loss: {bilstm_loss}, Accuracy: {bilstm_accuracy}")
+    
+    print("\n--- Detailed Performance Metrics ---")
+    
+    # Calculate predictions
+    y_pred_bilstm = bilstm_model.predict(X_test_pad)
+    if num_classes > 2:  # Multi-class case
+        y_pred_bilstm = np.argmax(y_pred_bilstm, axis=1)
+    else:  # Binary case
+        y_pred_bilstm = (y_pred_bilstm > 0.5).astype(int).flatten()
+    
+    # Calculate and display BiLSTM metrics
+    print("\nBiLSTM Model Detailed Metrics:")
+    classification_report_str = classification_report(y_test, y_pred_bilstm)
+    print(classification_report_str)
+    bilstm_precision = precision_score(y_test, y_pred_bilstm, average='weighted')
+    bilstm_recall = recall_score(y_test, y_pred_bilstm, average='weighted')
+    bilstm_f1 = f1_score(y_test, y_pred_bilstm, average='weighted')
+    
+    # Format metrics as percentages
+    print(f"BiLSTM Metrics Summary:")
+    print(f"Accuracy: {bilstm_accuracy:.2%}")
+    print(f"Precision: {bilstm_precision:.2%}")
+    print(f"Recall: {bilstm_recall:.2%}")
+    print(f"F1-Score: {bilstm_f1:.2%}")
+    
+    # Calculate actual number of epochs trained
+    actual_bilstm_epochs = len(bilstm_history.history['loss'])
+    print(f"\nActual epochs trained - BiLSTM: {actual_bilstm_epochs}")
+    
+    # 9. Plot training history
+    plt.figure(figsize=(10, 5))
+    
+    plt.subplot(1, 2, 1)
+    plt.plot(bilstm_history.history['accuracy'], label='Train')
+    plt.plot(bilstm_history.history['val_accuracy'], label='Validation')
+    plt.title('BiLSTM Model Accuracy')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
+    plt.legend()
+    
+    plt.subplot(1, 2, 2)
+    plt.plot(bilstm_history.history['loss'], label='Train')
+    plt.plot(bilstm_history.history['val_loss'], label='Validation')
+    plt.title('BiLSTM Model Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'model_performance.png'))
+    
+    # 10. Predict sentiment for sample tweets
+    sample_tweets = [
+        "AI is going to revolutionize the job market in Malaysia!",
+        "Worried about losing my job to AI in the coming years",
+        "The impact of AI on Malaysian jobs remains to be seen"
+    ]
+    
+    print("\nBiLSTM Model Predictions:")
+    sample_predictions = []
+    for tweet in sample_tweets:
+        sentiment, confidence = predict_sentiment(tweet, bilstm_model, tokenizer, 
+                                                sentiment_mapping, max_len, num_classes)
+        print(f"Tweet: {tweet}")
+        print(f"Sentiment: {sentiment} (Confidence: {confidence:.2f})\n")
+        sample_predictions.append({
+            'Tweet': tweet,
+            'Sentiment': sentiment,
+            'Confidence': confidence
+        })
+    
+    # Save sample predictions
+    pd.DataFrame(sample_predictions).to_csv(
+        os.path.join(output_dir, 'sample_predictions.csv'), index=False
+    )
+    
+    # 11. Save the model and supporting files
+    model_path = os.path.join(output_dir, 'sentiment_model.h5')
+    bilstm_model.save(model_path)
+    print(f"Model saved to {model_path}")
+    
+    # Save tokenizer and encoder
+    with open(os.path.join(output_dir, 'tokenizer.pickle'), 'wb') as handle:
+        pickle.dump(tokenizer, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    
+    with open(os.path.join(output_dir, 'label_encoder.pickle'), 'wb') as handle:
+        pickle.dump(encoder, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    
+    # Save model architecture as JSON
+    model_json = bilstm_model.to_json()
+    with open(os.path.join(output_dir, 'model_architecture.json'), 'w') as json_file:
+        json_file.write(model_json)
+    
+    # Save the sentiment distribution to a CSV file
+    sentiment_distribution = df['Sentiment'].value_counts().reset_index()
+    sentiment_distribution.columns = ['Sentiment', 'Count']
+    sentiment_distribution.to_csv(
+        os.path.join(output_dir, 'sentiment_distribution.csv'), index=False
+    )
+    
+    # Save the classification report to a text file
+    with open(os.path.join(output_dir, 'classification_report.txt'), 'w') as f:
+        f.write(classification_report_str)
+    
+    # Create a performance summary DataFrame and save to CSV
+    performance_metrics = pd.DataFrame({
+        'Model': ['BiLSTM'],
+        'Accuracy': [bilstm_accuracy],
+        'Precision': [bilstm_precision],
+        'Recall': [bilstm_recall],
+        'F1_Score': [bilstm_f1],
+        'Epochs_Trained': [actual_bilstm_epochs]
+    })
+    performance_metrics.to_csv(
+        os.path.join(output_dir, 'performance_metrics.csv'), index=False
+    )
+    
+    # Save history to CSV
+    history_df = pd.DataFrame(bilstm_history.history)
+    history_df.to_csv(os.path.join(output_dir, 'training_history.csv'), index=False)
+    
+    # Log completion
+    end_time = pd.Timestamp.now()
+    elapsed_time = end_time - start_time
+    print(f"\nBiLSTM Analysis completed at: {end_time}")
+    print(f"Total execution time: {elapsed_time}")
+    
+    # Save execution log
+    with open(os.path.join(output_dir, 'execution_log.txt'), 'w') as f:
+        f.write(f"Analysis started: {start_time}\n")
+        f.write(f"Analysis completed: {end_time}\n")
+        f.write(f"Total execution time: {elapsed_time}\n")
+        f.write(f"Number of classes: {num_classes}\n")
+        f.write(f"Max sequence length: {max_len}\n")
+        f.write(f"Training samples: {len(X_train)}\n")
+        f.write(f"Testing samples: {len(X_test)}\n")
+        f.write(f"Class distribution: {np.bincount(y_train).tolist()}\n")
+        f.write(f"Final epochs: {actual_bilstm_epochs}\n")
+        f.write(f"Final accuracy: {bilstm_accuracy:.4f}\n")
+        f.write(f"Final loss: {bilstm_loss:.4f}\n")
+        
+    print(f"\nAll results saved to {output_dir}")
+    
