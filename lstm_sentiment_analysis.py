@@ -13,6 +13,7 @@ from tensorflow.keras.preprocessing.sequence import pad_sequences
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Embedding, LSTM, Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.optimizers import Adam
 import matplotlib.pyplot as plt
 import pickle
 import os
@@ -62,9 +63,15 @@ def clean_text(text):
 def create_lstm_model(num_classes=1, max_len=100):
     model = Sequential()
     model.add(Embedding(input_dim=5000, output_dim=128, input_length=max_len))
-    model.add(LSTM(units=128, dropout=0.2, recurrent_dropout=0.2))
-    model.add(Dense(64, activation='relu'))
-    model.add(Dropout(0.5))
+    # Updated parameters:
+    # - LSTM Units: 160 (was 128)
+    # - LSTM Dropout: 0.1 (was 0.2)
+    # - LSTM Recurrent Dropout: 0.4 (was 0.2)
+    model.add(LSTM(units=160, dropout=0.1, recurrent_dropout=0.4))
+    # Updated Dense Units: 128 (was 64)
+    model.add(Dense(128, activation='relu'))
+    # Updated Dense Dropout: 0.3 (was 0.5)
+    model.add(Dropout(0.3))
     
     # Adjust the output layer based on number of classes
     if num_classes == 2:  # Binary (e.g., Positive vs Negative)
@@ -74,7 +81,8 @@ def create_lstm_model(num_classes=1, max_len=100):
         model.add(Dense(num_classes, activation='softmax'))
         loss = 'sparse_categorical_crossentropy'
     
-    model.compile(optimizer='adam', loss=loss, metrics=['accuracy'])
+    # Updated Learning Rate: 0.0013858703174839794 (was default)
+    model.compile(optimizer=Adam(learning_rate=0.0013858703174839794), loss=loss, metrics=['accuracy'])
     return model
 
 def predict_sentiment(text, model, tokenizer, sentiment_mapping, max_len, num_classes):
@@ -98,43 +106,6 @@ def predict_sentiment(text, model, tokenizer, sentiment_mapping, max_len, num_cl
             break
     
     return sentiment, float(confidence)
-
-def plot_model_metrics(accuracy, precision, recall, f1, output_path):
-    """
-    Creates a bar chart showing the model's performance metrics.
-    
-    Args:
-        accuracy: Model accuracy value
-        precision: Model precision score
-        recall: Model recall score
-        f1: Model F1-score
-        output_path: Path to save the chart
-    """
-    metrics = ['Accuracy', 'Precision', 'Recall', 'F1-Score']
-    values = [accuracy, precision, recall, f1]
-    
-    # Convert to percentage for better visualization
-    values_percent = [val * 100 for val in values]
-    
-    plt.figure(figsize=(10, 6))
-    bars = plt.bar(metrics, values_percent, color=['#2C7BB6', '#D7191C', '#FDAE61', '#1A9641'])
-    
-    # Add value labels on top of the bars
-    for bar in bars:
-        height = bar.get_height()
-        plt.text(bar.get_x() + bar.get_width()/2., height + 1,
-                 f'{height:.2f}%', ha='center', va='bottom', fontweight='bold')
-    
-    plt.title('LSTM Model Performance Metrics with Current Hyperparameters', fontsize=16)
-    plt.ylabel('Percentage (%)', fontsize=12)
-    plt.ylim(0, 105)  # Set y-axis limit to accommodate the labels
-    
-    # Add grid lines for better readability
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
-    
-    plt.tight_layout()
-    plt.savefig(output_path)
-    print(f"Performance metrics visualization saved to {output_path}")
 
 if __name__ == "__main__":
     # Log execution time
@@ -192,6 +163,7 @@ if __name__ == "__main__":
     lstm_history = lstm_model.fit(
         X_train_pad, y_train,
         epochs=10,
+        # Batch Size: 32 (same as before)
         batch_size=32,
         validation_split=0.1,
         callbacks=[early_stopping]
@@ -250,15 +222,6 @@ if __name__ == "__main__":
     
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'model_performance.png'))
-    
-    # NEW: Create and save a performance metrics bar chart
-    plot_model_metrics(
-        lstm_accuracy, 
-        lstm_precision, 
-        lstm_recall, 
-        lstm_f1, 
-        os.path.join(output_dir, 'performance_metrics_chart.png')
-    )
     
     # 10. Predict sentiment for sample tweets
     sample_tweets = [

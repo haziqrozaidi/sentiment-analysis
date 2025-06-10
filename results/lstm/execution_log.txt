@@ -1,11 +1,11 @@
-Analysis started: 2025-06-10 02:08:44.815457
-Analysis completed: 2025-06-10 02:10:10.574969
-Total execution time: 0 days 00:01:25.759512
+Analysis started: 2025-06-10 08:01:56.394070
+Analysis completed: 2025-06-10 08:03:05.817323
+Total execution time: 0 days 00:01:09.423253
 Number of classes: 3
 Max sequence length: 703
 Training samples: 681
 Testing samples: 171
 Class distribution: [74, 279, 328]
-Final epochs: 7
-Final accuracy: 0.7427
-Final loss: 0.6900
+Final epochs: 5
+Final accuracy: 0.7018
+Final loss: 0.7977
